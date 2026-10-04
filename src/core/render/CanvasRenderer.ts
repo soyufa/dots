@@ -92,8 +92,13 @@ export class CanvasRenderer {
    * HiDPI 스케일링 동기화 및 리사이즈
    */
   resize(widthCss: number, heightCss: number): void {
-    this.widthCss = Math.floor(widthCss);
-    this.heightCss = Math.floor(heightCss);
+    // 정규화 좌표는 정사각형 공간 기준이므로, 컨테이너가 직사각형이 되더라도(모바일 세로 화면 등)
+    // 캔버스는 항상 가운데 정렬된 정사각형으로 맞춘다. (가로/세로를 따로 늘리면 원형 테두리와 점 위치가 어긋남)
+    const side = Math.floor(Math.min(widthCss, heightCss));
+    const offsetX = Math.floor((widthCss - side) / 2);
+    const offsetY = Math.floor((heightCss - side) / 2);
+    this.widthCss = side;
+    this.heightCss = side;
     this.dpr = Math.min(window.devicePixelRatio || 1, 2.5);
 
     const canvases = [this.bgCanvas, this.staticCanvas, this.activeCanvas, this.fxCanvas];
@@ -104,6 +109,8 @@ export class CanvasRenderer {
       canvas.height = Math.floor(this.heightCss * this.dpr);
       canvas.style.width = `${this.widthCss}px`;
       canvas.style.height = `${this.heightCss}px`;
+      canvas.style.left = `${offsetX}px`;
+      canvas.style.top = `${offsetY}px`;
 
       const ctx = contexts[idx];
       ctx.setTransform(1, 0, 0, 1, 0, 0); // 리셋

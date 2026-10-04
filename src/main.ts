@@ -78,9 +78,11 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // 5. 반응형 캔버스 리사이즈 함수
   const updateCanvasSize = () => {
-    const rect = canvasCard.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {
-      renderer.resize(rect.width, rect.height);
+    // 테두리(border)를 제외한 실제 캔버스 배치 영역 크기
+    const width = canvasCard.clientWidth;
+    const height = canvasCard.clientHeight;
+    if (width > 0 && height > 0) {
+      renderer.resize(width, height);
       renderer.setStaticPaths(gameEngine.getStaticPaths());
     }
   };

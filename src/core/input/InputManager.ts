@@ -72,7 +72,9 @@ export class InputManager {
    * 클라이언트 CSS 화면 좌표 -> 0.0~1.0 정규화 좌표 변환
    */
   private screenToNormalized(screenX: number, screenY: number): Point2D {
-    const rect = this.container.getBoundingClientRect();
+    // 렌더러가 컨테이너 안에 그린 정사각형 캔버스 기준으로 변환 (렌더링 좌표와 1:1 일치)
+    const surface = this.container.querySelector('canvas') ?? this.container;
+    const rect = surface.getBoundingClientRect();
     const x = (screenX - rect.left) / rect.width;
     const y = (screenY - rect.top) / rect.height;
     return {

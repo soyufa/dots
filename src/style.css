@@ -138,10 +138,11 @@ html, body {
 /* 도화지 캔버스 컨테이너 */
 .canvas-card {
   position: relative;
-  flex: 1;
-  width: 100%;
+  flex: none;
+  /* 보드는 항상 정사각형: 화면 높이가 부족하면 폭을 줄여 비율을 유지한다 */
+  width: min(100%, calc(100vh - 190px));
+  width: min(100%, calc(100dvh - 190px));
   aspect-ratio: 1 / 1;
-  max-height: calc(100vh - 190px);
   margin: 0 auto;
   background-color: var(--paper-color);
   border-radius: 20px;
