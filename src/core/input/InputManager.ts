@@ -370,15 +370,29 @@ export class InputManager {
   }
 
   /**
-   * 충돌 발생 시 차단(Rebound) 피드백 및 드로잉 중단
+   * 충돌 발생 시 차단(Rebound) 피드백 및 드로잉 즉각 취소/삭제
    */
   private triggerReboundBlock(collisionPos: Point2D): void {
     this.soundEngine.stopDrawingSound();
     this.soundEngine.playCollisionBuzzer();
     this.triggerHaptic('error');
 
+    // 화면 쉐이크(흔들림) 효과
+    this.container.classList.add('shake');
+    setTimeout(() => this.container.classList.remove('shake'), 350);
+
     this.callbacks.onCollision?.(collisionPos);
     this.cancelDrawing();
+
+    // [핵심 버그 수정] 충돌 즉시 현재 터치/드래그를 완전히 종료 및 무효화!
+    // 마우스를 누른 채로 계속 움직여도 선이 다시 생기거나 이어지지 않도록 철저히 리셋
+    this.isPointerDown = false;
+    this.pointerId = null;
+    this.activePair = null;
+    this.activeStartTarget = null;
+    this.isDrawing = false;
+    this.activePoints = [];
+    this.activeSegments = [];
   }
 
   /**
@@ -450,9 +464,8 @@ export class InputManager {
 
   private cancelDrawing(): void {
     this.soundEngine.stopDrawingSound();
-    if (this.isDrawing) {
-      this.callbacks.onDrawCancel?.();
-    }
+    // 화면의 활성 선분을 즉시 완전히 지움
+    this.callbacks.onDrawCancel?.();
     // 취소 시 기존 백업 경로가 있다면 복원
     this.rollbackStashedPath();
 
