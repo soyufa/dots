@@ -4,6 +4,7 @@ import { CanvasRenderer } from '../render/CanvasRenderer';
 import { SoundEngine } from '../audio/SoundEngine';
 import { Intersection } from '../physics/Intersection';
 import { StageManager } from './StageManager';
+import { GameRules } from '../rules/GameRules';
 
 export interface GameEngineEvents {
   onStateChange: (state: GameState) => void;
@@ -100,6 +101,10 @@ export class GameEngine {
 
     this.events.onStageLoad(this.currentStage, progress.cleared, progress.stars);
     this.events.onConnectionChange(0, this.currentStage.dots.length);
+
+    // 다음 스테이지를 플레이 중 미리 생성해 둔다 (후반 Hard 는 생성에 ~1초 걸릴 수 있음)
+    const { difficulty, stageIndex } = this.currentStage;
+    setTimeout(() => this.stageManager.getStage(difficulty, stageIndex + 1), 400);
   }
 
   /**
@@ -284,8 +289,8 @@ export class GameEngine {
             if (Intersection.doSegmentsIntersect(sa.p1, sa.p2, sb.p1, sb.p2)) {
               return true;
             }
-            // 두 선분 간 최소 안전 거리(0.005) 검사
-            if (Intersection.distanceBetweenSegments(sa, sb) < 0.005) {
+            // 두 선분 간 최소 안전 거리 검사 (입력 판정과 동일 규칙, 스플라인 보간 여유 포함)
+            if (Intersection.distanceBetweenSegments(sa, sb) < GameRules.LINE_CLEARANCE - GameRules.SMOOTH_SLACK) {
               return true;
             }
           }

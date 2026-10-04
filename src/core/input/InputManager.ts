@@ -5,6 +5,7 @@ import { Vector2 } from '../math/Vector2';
 import { Spline } from '../math/Spline';
 import { Intersection } from '../physics/Intersection';
 import { SoundEngine } from '../audio/SoundEngine';
+import { GameRules } from '../rules/GameRules';
 
 export interface InputCallbacks {
   onPathComplete: (pairId: string, path: SplinePath) => void;
@@ -111,18 +112,13 @@ export class InputManager {
   private handlePointerMove = (e: PointerEvent): void => {
     if (!this.isPointerDown || e.pointerId !== this.pointerId) return;
 
-    const normPos = this.screenToNormalized(e.clientX, e.clientY);
+    // 테두리 밖 좌표는 테두리 안쪽(선 두께 포함)으로 클램핑 → 선은 어떤 경우에도 테두리를 넘지 않는다
+    const normPos = this.clampToBoard(this.screenToNormalized(e.clientX, e.clientY));
     const screenDist = Math.hypot(e.clientX - this.startScreenPos.x, e.clientY - this.startScreenPos.y);
 
     // 아직 드로잉 모드가 아니고 드래그 임계값(8px)을 넘은 경우
     if (!this.isDrawing) {
       if (screenDist > 8 && this.activePair && this.activeStartTarget) {
-        // 시작 직후 목표 위치가 테두리 밖인 경우 즉각 차단
-        if (!this.isInsideBoard(normPos)) {
-          this.triggerReboundBlock(normPos);
-          return;
-        }
-
         // 드로잉 개시!
         this.isDrawing = true;
 
@@ -154,7 +150,7 @@ export class InputManager {
       if (distFromPrev < 0.012) return;
 
       // [즉각 차단(Rebound / Block) 0순위: 보드 테두리 밖 이탈 절대 차단]
-      if (!this.isInsideBoard(normPos)) {
+      if (!this.isLineInside(normPos)) {
         this.triggerReboundBlock(normPos);
         return;
       }
@@ -175,17 +171,17 @@ export class InputManager {
         const subSegment: LineSegment = { p1: subPrev, p2: subPos };
 
         // 0. 서브스텝 단위 보드 테두리 밖 이탈 실시간 검사 (1픽셀도 밖으로 나갈 수 없음)
-        if (!this.isInsideBoard(subPos)) {
+        if (!this.isLineInside(subPos)) {
           this.triggerReboundBlock(subPos);
           return;
         }
 
-        // 1. 타 색상 선분과의 교차 검사 (최소 안전 간격 0.006 적용)
+        // 1. 타 색상 선분과의 교차 검사 (선 두께만큼의 최소 간격 → 시각적으로도 겹치지 않음)
         const intersectCheck = Intersection.doesSegmentIntersectExistingLines(
           subSegment,
           existingLines,
           this.activePair.pairId,
-          0.006
+          GameRules.LINE_CLEARANCE
         );
 
         if (intersectCheck.hit) {
@@ -204,19 +200,14 @@ export class InputManager {
         }
       }
 
-      // 3. 다른 색상 점 중심 관통 검사 (Keep-out zone: 점 핵 중심부 0.45만 차단)
-      if (this.currentStage) {
-        for (const otherPair of this.currentStage.dots) {
-          if (otherPair.pairId === this.activePair.pairId) continue;
-          const keepOutRadius = otherPair.radius * 0.45;
-          if (
-            Intersection.doesSegmentIntersectCircle(prevPoint, normPos, otherPair.pointA, keepOutRadius) ||
-            Intersection.doesSegmentIntersectCircle(prevPoint, normPos, otherPair.pointB, keepOutRadius)
-          ) {
-            this.triggerReboundBlock(normPos);
-            return;
-          }
-        }
+      // 3. 다른 색상 점 침범 검사 (선 가장자리가 점에 닿으면 차단)
+      //    벽에 붙은 점은 금지 영역이 테두리까지 이어지므로 점과 벽 사이로 빠져나갈 수 없다 (가림벽)
+      if (
+        this.currentStage &&
+        GameRules.segmentHitsForeignDot(prevPoint, normPos, this.currentStage.dots, this.activePair.pairId)
+      ) {
+        this.triggerReboundBlock(normPos);
+        return;
       }
 
       // 4. 자기 교차 검사
@@ -240,7 +231,8 @@ export class InputManager {
         const snapIntersectCheck = Intersection.doesSegmentIntersectExistingLines(
           finalSegment,
           existingLines,
-          this.activePair.pairId
+          this.activePair.pairId,
+          GameRules.LINE_CLEARANCE
         );
         if (snapIntersectCheck.hit) {
           this.triggerReboundBlock(normPos);
@@ -257,19 +249,13 @@ export class InputManager {
           }
         }
 
-        // 3) 다른 색상 점 중심 관통 검사 (Keep-out zone: 점 핵 중심부 0.45만 차단)
-        if (this.currentStage) {
-          for (const otherPair of this.currentStage.dots) {
-            if (otherPair.pairId === this.activePair.pairId) continue;
-            const keepOutRadius = otherPair.radius * 0.45;
-            if (
-              Intersection.doesSegmentIntersectCircle(normPos, targetPoint, otherPair.pointA, keepOutRadius) ||
-              Intersection.doesSegmentIntersectCircle(normPos, targetPoint, otherPair.pointB, keepOutRadius)
-            ) {
-              this.triggerReboundBlock(normPos);
-              return;
-            }
-          }
+        // 3) 다른 색상 점 침범 검사
+        if (
+          this.currentStage &&
+          GameRules.segmentHitsForeignDot(normPos, targetPoint, this.currentStage.dots, this.activePair.pairId)
+        ) {
+          this.triggerReboundBlock(normPos);
+          return;
         }
 
         // 4) 자기 교차 검사 (스냅 선분 포함)
@@ -355,25 +341,17 @@ export class InputManager {
   }
 
   /**
-   * 점/선 좌표가 보드 내부(테두리 안쪽)에 있는지 엄격하게 검사
-   * 테두리 밖으로 단 1픽셀도 나갈 수 없도록 margin = 0 철저 적용
+   * 선 좌표를 테두리 안쪽(선 두께의 절반만큼 안쪽)으로 투영.
+   * 선은 테두리를 1픽셀도 넘지 않으며, 벽에 붙은 점과 벽 사이 틈도 점 금지 영역이 막는다.
    */
-  private isInsideBoard(point: Point2D): boolean {
+  private isLineInside(point: Point2D): boolean {
     if (!this.currentStage || !this.currentStage.board) return true;
-    const board = this.currentStage.board;
+    return GameRules.isLinePointInside(this.currentStage.board, point);
+  }
 
-    if (board.type === 'circle') {
-      const dist = Math.hypot(point.x - board.centerX, point.y - board.centerY);
-      return dist <= board.radius;
-    } else if (board.type === 'rect') {
-      return (
-        point.x >= board.bounds.minX &&
-        point.x <= board.bounds.maxX &&
-        point.y >= board.bounds.minY &&
-        point.y <= board.bounds.maxY
-      );
-    }
-    return true;
+  private clampToBoard(point: Point2D): Point2D {
+    if (!this.currentStage || !this.currentStage.board) return point;
+    return GameRules.clampLinePoint(this.currentStage.board, point);
   }
 
   /**
@@ -425,7 +403,15 @@ export class InputManager {
     }));
 
     for (const seg of tessellatedSegments) {
-      if (Intersection.doesSegmentIntersectExistingLines(seg, existingLines, pairId, 0.005).hit) {
+      // 스플라인 보간은 원래 입력점 사이를 살짝 부풀릴 수 있으므로 약간의 여유(SMOOTH_SLACK)를 준다
+      if (
+        Intersection.doesSegmentIntersectExistingLines(
+          seg,
+          existingLines,
+          pairId,
+          GameRules.LINE_CLEARANCE - GameRules.SMOOTH_SLACK
+        ).hit
+      ) {
         // 교차 발생 시 스냅 및 완료 즉각 차단!
         this.triggerReboundBlock(rawPoints[rawPoints.length - 1]);
         return;

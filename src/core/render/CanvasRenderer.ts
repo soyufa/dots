@@ -3,6 +3,7 @@ import { DotPair, Obstacle, StageData } from '../../types/stage';
 import { SplinePath } from '../../types/game';
 import { Spline } from '../math/Spline';
 import { Vector2 } from '../math/Vector2';
+import { GameRules } from '../rules/GameRules';
 
 interface SparkParticle {
   x: number;
@@ -609,7 +610,7 @@ export class CanvasRenderer {
     this.clipToBoard(ctx);
     this.staticPaths.forEach((spline) => {
       if (spline.rawPoints.length < 2) return;
-      this.drawSmoothSpline(ctx, spline.rawPoints, spline.color, 9, false);
+      this.drawSmoothSpline(ctx, spline.rawPoints, spline.color, this.lineWidthPx(), false);
     });
     ctx.restore();
   }
@@ -625,8 +626,13 @@ export class CanvasRenderer {
     // 활성 선분 렌더링 (가벼운 글로우 효과와 함께 테두리 내 클리핑)
     ctx.save();
     this.clipToBoard(ctx);
-    this.drawSmoothSpline(ctx, this.activePath, this.activeColor, 9.5, true);
+    this.drawSmoothSpline(ctx, this.activePath, this.activeColor, this.lineWidthPx(), true);
     ctx.restore();
+  }
+
+  /** 선 두께(px). 충돌 판정과 같은 정규화 두께를 사용해 "판정상 안 겹침 = 화면상 안 겹침"을 보장 */
+  private lineWidthPx(): number {
+    return GameRules.LINE_WIDTH * Math.min(this.widthCss, this.heightCss);
   }
 
   /**
