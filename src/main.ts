@@ -45,6 +45,9 @@ window.addEventListener('DOMContentLoaded', () => {
     },
     onStageClear: (evaluation) => {
       uiManager?.showClearModal(evaluation);
+    },
+    onIntersectionWarning: (message) => {
+      uiManager?.showWarningToast(message);
     }
   });
 

@@ -26,3 +26,4 @@ dist-ssr
 
 # Agent files
 .agents/
+.claude/settings.local.json

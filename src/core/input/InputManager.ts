@@ -158,30 +158,39 @@ export class InputManager {
         return;
       }
 
-      // [즉각 차단(Rebound / Block) 검사]
-      // 1. 타 색상 선분과의 교차 검사
+      // [고속 드래그 터널링 방지 서브스텝 보간 및 즉각 차단 검사]
       const existingLines = Array.from(this.staticPaths.values()).map((p) => ({
         pairId: p.pairId,
         segments: p.tessellatedSegments
       }));
 
-      const intersectCheck = Intersection.doesSegmentIntersectExistingLines(
-        newSegment,
-        existingLines,
-        this.activePair.pairId
-      );
+      const stepCount = Math.max(1, Math.ceil(distFromPrev / 0.012));
+      for (let s = 1; s <= stepCount; s++) {
+        const subT = s / stepCount;
+        const subPos = Vector2.lerp(prevPoint, normPos, subT);
+        const subPrev = s === 1 ? prevPoint : Vector2.lerp(prevPoint, normPos, (s - 1) / stepCount);
+        const subSegment: LineSegment = { p1: subPrev, p2: subPos };
 
-      if (intersectCheck.hit) {
-        this.triggerReboundBlock(normPos);
-        return;
-      }
+        // 1. 타 색상 선분과의 교차 검사 (최소 안전 간격 0.006 적용)
+        const intersectCheck = Intersection.doesSegmentIntersectExistingLines(
+          subSegment,
+          existingLines,
+          this.activePair.pairId,
+          0.006
+        );
 
-      // 2. 장애물 충돌 검사
-      if (this.currentStage) {
-        for (const obs of this.currentStage.obstacles) {
-          if (Intersection.doesSegmentIntersectObstacle(prevPoint, normPos, obs)) {
-            this.triggerReboundBlock(normPos);
-            return;
+        if (intersectCheck.hit) {
+          this.triggerReboundBlock(subPos);
+          return;
+        }
+
+        // 2. 장애물 충돌 검사
+        if (this.currentStage) {
+          for (const obs of this.currentStage.obstacles) {
+            if (Intersection.doesSegmentIntersectObstacle(subPrev, subPos, obs)) {
+              this.triggerReboundBlock(subPos);
+              return;
+            }
           }
         }
       }
@@ -382,8 +391,25 @@ export class InputManager {
     const pairId = this.activePair.pairId;
     const color = this.activePair.color;
     const rawPoints = [...this.activePoints];
-    const tessellatedSegments = Spline.tessellatePath(rawPoints);
-    const totalLength = Spline.calculatePathLength(rawPoints);
+
+    // 스플라인 곡선 포인트 생성 (렌더링과 1:1 일치하는 고밀도 세그먼트 생성)
+    const splinePoints = Spline.generateSplinePoints(rawPoints, 6);
+    const tessellatedSegments = Spline.tessellatePath(splinePoints);
+    const totalLength = Spline.calculatePathLength(splinePoints);
+
+    // [최종 게이트: 완성된 전체 경로가 기존의 다른 경로들과 교차하는지 전수 검증]
+    const existingLines = Array.from(this.staticPaths.values()).map((p) => ({
+      pairId: p.pairId,
+      segments: p.tessellatedSegments
+    }));
+
+    for (const seg of tessellatedSegments) {
+      if (Intersection.doesSegmentIntersectExistingLines(seg, existingLines, pairId, 0.005).hit) {
+        // 교차 발생 시 스냅 및 완료 즉각 차단!
+        this.triggerReboundBlock(rawPoints[rawPoints.length - 1]);
+        return;
+      }
+    }
 
     const completedPath: SplinePath = {
       pairId,

@@ -60,6 +60,18 @@ export class Intersection {
   }
 
   /**
+   * 두 선분 사이의 최단 거리 계산
+   */
+  static distanceBetweenSegments(s1: LineSegment, s2: LineSegment): number {
+    if (this.checkSegmentIntersection(s1, s2)) return 0;
+    const d1 = Vector2.distanceToSegment(s1.p1, s2.p1, s2.p2);
+    const d2 = Vector2.distanceToSegment(s1.p2, s2.p1, s2.p2);
+    const d3 = Vector2.distanceToSegment(s2.p1, s1.p1, s1.p2);
+    const d4 = Vector2.distanceToSegment(s2.p2, s1.p1, s1.p2);
+    return Math.min(d1, d2, d3, d4);
+  }
+
+  /**
    * 선분과 원의 충돌 검사
    */
   static doesSegmentIntersectCircle(p1: Point2D, p2: Point2D, center: Point2D, radius: number): boolean {
@@ -227,17 +239,21 @@ export class Intersection {
   }
 
   /**
-   * 단일 선분과 기존 완료된 선분 목록 간의 교차 검사
+   * 단일 선분과 기존 완료된 선분 목록 간의 교차 및 근접 검사
    */
   static doesSegmentIntersectExistingLines(
     segment: LineSegment,
     existingLines: { pairId: string; segments: LineSegment[] }[],
-    excludePairId?: string
+    excludePairId?: string,
+    minClearance: number = 0.006
   ): { hit: boolean; hitPairId?: string } {
     for (const line of existingLines) {
       if (excludePairId && line.pairId === excludePairId) continue;
       for (const existingSeg of line.segments) {
         if (this.checkSegmentIntersection(segment, existingSeg)) {
+          return { hit: true, hitPairId: line.pairId };
+        }
+        if (minClearance > 0 && this.distanceBetweenSegments(segment, existingSeg) < minClearance) {
           return { hit: true, hitPairId: line.pairId };
         }
       }

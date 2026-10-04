@@ -155,6 +155,22 @@ export class UIManager {
     }
   }
 
+  showWarningToast(msg: string): void {
+    if (this.boardGuideText) {
+      const original = this.boardGuideText.textContent;
+      this.boardGuideText.textContent = msg;
+      this.boardGuideText.style.color = '#FF3838';
+      this.boardGuideText.style.fontWeight = 'bold';
+      setTimeout(() => {
+        if (this.boardGuideText) {
+          this.boardGuideText.textContent = original;
+          this.boardGuideText.style.color = '';
+          this.boardGuideText.style.fontWeight = '';
+        }
+      }, 2500);
+    }
+  }
+
   updateConnectionCount(connected: number, total: number): void {
     this.connectionStatus.textContent = `연결: ${connected} / ${total}`;
   }

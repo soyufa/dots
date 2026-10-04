@@ -2,6 +2,7 @@ import { GameState, SplinePath, StageEvaluation, DrawCommand } from '../../types
 import { StageData, DifficultyLevel } from '../../types/stage';
 import { CanvasRenderer } from '../render/CanvasRenderer';
 import { SoundEngine } from '../audio/SoundEngine';
+import { Intersection } from '../physics/Intersection';
 import { StageManager } from './StageManager';
 
 export interface GameEngineEvents {
@@ -9,6 +10,7 @@ export interface GameEngineEvents {
   onStageLoad: (stage: StageData, isCleared: boolean, stars: number) => void;
   onConnectionChange: (connectedCount: number, totalCount: number) => void;
   onStageClear: (evaluation: StageEvaluation) => void;
+  onIntersectionWarning?: (message: string) => void;
 }
 
 export class GameEngine {
@@ -213,7 +215,16 @@ export class GameEngine {
     const totalPairs = this.currentStage.dots.length;
     if (this.staticPaths.size < totalPairs) return;
 
-    // 모든 선이 연결되었을 때 클리어 평가
+    // [필수 규칙 검증] 모든 완성된 선들 간에 교차가 존재하는지 엄격히 전수 검사!
+    if (this.hasAnyPathIntersection()) {
+      console.warn('[GameEngine] 선이 교차/겹쳐 있어 클리어 불가!');
+      this.soundEngine.playCollisionBuzzer();
+      this.renderer.triggerCollisionFX({ x: 0.5, y: 0.5 });
+      this.events.onIntersectionWarning?.('⚠️ 선이 서로 겹쳐 있습니다! 선을 다시 연결해 주세요.');
+      return;
+    }
+
+    // 모든 선이 무교차로 올바르게 연결되었을 때만 클리어 평가
     let userTotalLength = 0;
     this.staticPaths.forEach((path) => {
       userTotalLength += path.totalLength;
@@ -248,5 +259,40 @@ export class GameEngine {
     setTimeout(() => {
       this.events.onStageClear(evaluation);
     }, 450);
+  }
+
+  /**
+   * 현재 완성된 모든 선들 간에 교차 또는 겹침이 존재하는지 전수 검사
+   */
+  private hasAnyPathIntersection(): boolean {
+    const paths = Array.from(this.staticPaths.values());
+
+    for (let i = 0; i < paths.length; i++) {
+      const segsA = paths[i].tessellatedSegments;
+
+      // 1. 자기 교차 검사
+      if (Intersection.doesPathSelfIntersect(segsA)) {
+        return true;
+      }
+
+      // 2. 다른 경로와의 교차 및 간격 검사
+      for (let j = i + 1; j < paths.length; j++) {
+        const segsB = paths[j].tessellatedSegments;
+        for (const sa of segsA) {
+          for (const sb of segsB) {
+            // 완전 선분 교차 검사
+            if (Intersection.doSegmentsIntersect(sa.p1, sa.p2, sb.p1, sb.p2)) {
+              return true;
+            }
+            // 두 선분 간 최소 안전 거리(0.005) 검사
+            if (Intersection.distanceBetweenSegments(sa, sb) < 0.005) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+
+    return false;
   }
 }
