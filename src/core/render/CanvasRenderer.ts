@@ -574,6 +574,30 @@ export class CanvasRenderer {
   }
 
   /**
+   * 보드 테두리 프레임 내부 영역으로 컨텍스트 클리핑 (선이 테두리 밖으로 삐져나가지 않도록 완벽 보장)
+   */
+  private clipToBoard(ctx: CanvasRenderingContext2D): void {
+    if (!this.currentStage || !this.currentStage.board) return;
+    const board = this.currentStage.board;
+    const minDim = Math.min(this.widthCss, this.heightCss);
+
+    ctx.beginPath();
+    if (board.type === 'circle') {
+      const cx = board.centerX * this.widthCss;
+      const cy = board.centerY * this.heightCss;
+      const r = board.radius * minDim;
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    } else if (board.type === 'rect') {
+      const rx = board.bounds.minX * this.widthCss;
+      const ry = board.bounds.minY * this.heightCss;
+      const rw = (board.bounds.maxX - board.bounds.minX) * this.widthCss;
+      const rh = (board.bounds.maxY - board.bounds.minY) * this.heightCss;
+      this.drawRoundedRect(ctx, rx, ry, rw, rh, 14);
+    }
+    ctx.clip();
+  }
+
+  /**
    * Layer 2: 완성된 정적 스플라인들
    */
   private renderStaticPaths(): void {
@@ -581,10 +605,13 @@ export class CanvasRenderer {
     ctx.clearRect(0, 0, this.widthCss, this.heightCss);
     if (this.widthCss === 0 || this.heightCss === 0) return;
 
+    ctx.save();
+    this.clipToBoard(ctx);
     this.staticPaths.forEach((spline) => {
       if (spline.rawPoints.length < 2) return;
       this.drawSmoothSpline(ctx, spline.rawPoints, spline.color, 9, false);
     });
+    ctx.restore();
   }
 
   /**
@@ -595,8 +622,11 @@ export class CanvasRenderer {
     ctx.clearRect(0, 0, this.widthCss, this.heightCss);
     if (this.activePath.length < 2) return;
 
-    // 활성 선분 렌더링 (가벼운 글로우 효과와 함께)
+    // 활성 선분 렌더링 (가벼운 글로우 효과와 함께 테두리 내 클리핑)
+    ctx.save();
+    this.clipToBoard(ctx);
     this.drawSmoothSpline(ctx, this.activePath, this.activeColor, 9.5, true);
+    ctx.restore();
   }
 
   /**

@@ -253,9 +253,17 @@ export class LevelRepository {
       }
 
       if (allOk && paths.length === numPairs) {
-        const boardMin = 0.12;
-        const boardMax = 0.88;
-        const boardSpan = boardMax - boardMin;
+        const dotRadius = difficulty === 'hard' ? 0.033 : difficulty === 'normal' ? 0.036 : 0.040;
+
+        // 원형 보드 안전 반경: 점의 외곽이 R=0.38 테두리 밖으로 단 1픽셀도 나가지 않도록 완전 내접
+        // dist(pt, center) + dotRadius <= 0.38 => dist(pt, center) <= 0.38 - dotRadius
+        const circleSafeR = 0.38 - dotRadius - 0.002;
+
+        // 사각 보드 안전 영역: [0.12, 0.88] 프레임 안쪽에 완벽 내접
+        const minXSafe = 0.12 + dotRadius + 0.002;
+        const maxXSafe = 0.88 - dotRadius - 0.002;
+        const minYSafe = 0.12 + dotRadius + 0.002;
+        const maxYSafe = 0.88 - dotRadius - 0.002;
 
         const pairs: DotPair[] = [];
         const solutionHints: SolutionHint[] = [];
@@ -266,47 +274,49 @@ export class LevelRepository {
 
         for (let i = 0; i < numPairs; i++) {
           const rawPath = paths[i];
-          const normPath: Point2D[] = rawPath.map((c) => ({
-            x: boardMin + (c.x / (G - 1)) * boardSpan,
-            y: boardMin + (c.y / (G - 1)) * boardSpan
-          }));
+          const normPath: Point2D[] = rawPath.map((c) => {
+            if (isCircle) {
+              const scale = circleSafeR / maxR;
+              return {
+                x: 0.5 + (c.x - cx) * scale,
+                y: 0.5 + (c.y - cy) * scale
+              };
+            } else {
+              const tx = (c.x - 1) / (G - 3);
+              const ty = (c.y - 1) / (G - 3);
+              return {
+                x: minXSafe + tx * (maxXSafe - minXSafe),
+                y: minYSafe + ty * (maxYSafe - minYSafe)
+              };
+            }
+          });
 
           const colorInfo = COLOR_PALETTE[i % COLOR_PALETTE.length];
           const pairId = `pair_${i + 1}`;
 
-          const headCell = rawPath[0];
-          const tailCell = rawPath[rawPath.length - 1];
-
           const startPt = { ...normPath[0] };
           const endPt = { ...normPath[normPath.length - 1] };
 
-          // 테두리 스냅 (차단벽 형성)
+          // 추가 안전 보증 클램프 (원형 및 사각 경계 절대 이탈 불가)
           if (isCircle) {
-            if (isBorder(headCell.x, headCell.y)) {
-              const ang = Math.atan2(startPt.y - 0.5, startPt.x - 0.5);
-              startPt.x = 0.5 + 0.38 * Math.cos(ang);
-              startPt.y = 0.5 + 0.38 * Math.sin(ang);
-              normPath[0] = { ...startPt };
+            for (const pt of [startPt, endPt]) {
+              const d = Math.hypot(pt.x - 0.5, pt.y - 0.5);
+              if (d > circleSafeR) {
+                const ang = Math.atan2(pt.y - 0.5, pt.x - 0.5);
+                pt.x = 0.5 + circleSafeR * Math.cos(ang);
+                pt.y = 0.5 + circleSafeR * Math.sin(ang);
+              }
             }
-            if (isBorder(tailCell.x, tailCell.y)) {
-              const ang = Math.atan2(endPt.y - 0.5, endPt.x - 0.5);
-              endPt.x = 0.5 + 0.38 * Math.cos(ang);
-              endPt.y = 0.5 + 0.38 * Math.sin(ang);
-              normPath[normPath.length - 1] = { ...endPt };
-            }
+            normPath[0] = { ...startPt };
+            normPath[normPath.length - 1] = { ...endPt };
           } else {
-            if (headCell.x === 1) { startPt.x = 0.12; normPath[0].x = 0.12; }
-            if (headCell.x === G - 2) { startPt.x = 0.88; normPath[0].x = 0.88; }
-            if (headCell.y === 1) { startPt.y = 0.12; normPath[0].y = 0.12; }
-            if (headCell.y === G - 2) { startPt.y = 0.88; normPath[0].y = 0.88; }
-
-            if (tailCell.x === 1) { endPt.x = 0.12; normPath[normPath.length - 1].x = 0.12; }
-            if (tailCell.x === G - 2) { endPt.x = 0.88; normPath[normPath.length - 1].x = 0.88; }
-            if (tailCell.y === 1) { endPt.y = 0.12; normPath[normPath.length - 1].y = 0.12; }
-            if (tailCell.y === G - 2) { endPt.y = 0.88; normPath[normPath.length - 1].y = 0.88; }
+            startPt.x = Math.max(minXSafe, Math.min(maxXSafe, startPt.x));
+            startPt.y = Math.max(minYSafe, Math.min(maxYSafe, startPt.y));
+            endPt.x = Math.max(minXSafe, Math.min(maxXSafe, endPt.x));
+            endPt.y = Math.max(minYSafe, Math.min(maxYSafe, endPt.y));
+            normPath[0] = { ...startPt };
+            normPath[normPath.length - 1] = { ...endPt };
           }
-
-          const dotRadius = difficulty === 'hard' ? 0.033 : difficulty === 'normal' ? 0.036 : 0.040;
 
           pairs.push({
             pairId,
@@ -326,7 +336,8 @@ export class LevelRepository {
           // 품질 통계 계산
           const straight = Math.hypot(startPt.x - endPt.x, startPt.y - endPt.y);
           minStraight = Math.min(minStraight, straight);
-          const pathLen = (rawPath.length - 1) * (boardSpan / (G - 1));
+          const stepScale = isCircle ? (circleSafeR / maxR) : ((maxXSafe - minXSafe) / (G - 3));
+          const pathLen = (rawPath.length - 1) * stepScale;
           totalDetour += straight > 1e-4 ? pathLen / straight : 1.0;
 
           let turns = 0;

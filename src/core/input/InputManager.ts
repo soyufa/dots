@@ -117,6 +117,12 @@ export class InputManager {
     // 아직 드로잉 모드가 아니고 드래그 임계값(8px)을 넘은 경우
     if (!this.isDrawing) {
       if (screenDist > 8 && this.activePair && this.activeStartTarget) {
+        // 시작 직후 목표 위치가 테두리 밖인 경우 즉각 차단
+        if (!this.isInsideBoard(normPos)) {
+          this.triggerReboundBlock(normPos);
+          return;
+        }
+
         // 드로잉 개시!
         this.isDrawing = true;
 
@@ -147,16 +153,13 @@ export class InputManager {
       // 너무 미세한 이동은 스킵하여 연산 최적화
       if (distFromPrev < 0.012) return;
 
-      const newSegment: LineSegment = { p1: prevPoint, p2: normPos };
-
-      // [즉각 차단(Rebound / Block) 0순위: 보드 경계선 밖 차단]
-      // 점의 중심에서 선이 출발할 때 테두리 벽에 바로 걸려서 튕기는 현상 방지: 시작점 반경 이내에서는 여유 허용
-      const startPoint = this.activeStartTarget === 'pointA' ? this.activePair.pointA : this.activePair.pointB;
-      const distFromStart = Vector2.distance(normPos, startPoint);
-      if (distFromStart > this.activePair.radius * 1.0 && !this.isInsideBoard(normPos)) {
+      // [즉각 차단(Rebound / Block) 0순위: 보드 테두리 밖 이탈 절대 차단]
+      if (!this.isInsideBoard(normPos)) {
         this.triggerReboundBlock(normPos);
         return;
       }
+
+      const newSegment: LineSegment = { p1: prevPoint, p2: normPos };
 
       // [고속 드래그 터널링 방지 서브스텝 보간 및 즉각 차단 검사]
       const existingLines = Array.from(this.staticPaths.values()).map((p) => ({
@@ -170,6 +173,12 @@ export class InputManager {
         const subPos = Vector2.lerp(prevPoint, normPos, subT);
         const subPrev = s === 1 ? prevPoint : Vector2.lerp(prevPoint, normPos, (s - 1) / stepCount);
         const subSegment: LineSegment = { p1: subPrev, p2: subPos };
+
+        // 0. 서브스텝 단위 보드 테두리 밖 이탈 실시간 검사 (1픽셀도 밖으로 나갈 수 없음)
+        if (!this.isInsideBoard(subPos)) {
+          this.triggerReboundBlock(subPos);
+          return;
+        }
 
         // 1. 타 색상 선분과의 교차 검사 (최소 안전 간격 0.006 적용)
         const intersectCheck = Intersection.doesSegmentIntersectExistingLines(
@@ -346,24 +355,22 @@ export class InputManager {
   }
 
   /**
-   * 점이 보드 내부(테두리 안쪽)에 있는지 검사하여 테두리 밖 우회 원천 차단
-   * 점의 중심에서 출발할 때 테두리 벽에 바로 걸려서 튕기는 현상을 완화하기 위해 점 반경 수준의 여유 버퍼를 허용
+   * 점/선 좌표가 보드 내부(테두리 안쪽)에 있는지 엄격하게 검사
+   * 테두리 밖으로 단 1픽셀도 나갈 수 없도록 margin = 0 철저 적용
    */
   private isInsideBoard(point: Point2D): boolean {
     if (!this.currentStage || !this.currentStage.board) return true;
     const board = this.currentStage.board;
-    const dotRadius = this.activePair ? this.activePair.radius : 0.04;
-    const margin = dotRadius * 0.75; // 테두리 여유 버퍼
 
     if (board.type === 'circle') {
       const dist = Math.hypot(point.x - board.centerX, point.y - board.centerY);
-      return dist <= board.radius + margin;
+      return dist <= board.radius;
     } else if (board.type === 'rect') {
       return (
-        point.x >= board.bounds.minX - margin &&
-        point.x <= board.bounds.maxX + margin &&
-        point.y >= board.bounds.minY - margin &&
-        point.y <= board.bounds.maxY + margin
+        point.x >= board.bounds.minX &&
+        point.x <= board.bounds.maxX &&
+        point.y >= board.bounds.minY &&
+        point.y <= board.bounds.maxY
       );
     }
     return true;
