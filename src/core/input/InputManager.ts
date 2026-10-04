@@ -1,0 +1,466 @@
+import { Point2D, LineSegment } from '../../types/geometry';
+import { DotPair, Obstacle, StageData } from '../../types/stage';
+import { SplinePath } from '../../types/game';
+import { Vector2 } from '../math/Vector2';
+import { Spline } from '../math/Spline';
+import { Intersection } from '../physics/Intersection';
+import { SoundEngine } from '../audio/SoundEngine';
+
+export interface InputCallbacks {
+  onPathComplete: (pairId: string, path: SplinePath) => void;
+  onPathErase: (pairId: string) => void;
+  onDrawStart?: () => void;
+  onDrawUpdate?: (points: Point2D[], color: string) => void;
+  onDrawCancel?: () => void;
+  onCollision?: (pos: Point2D) => void;
+}
+
+export class InputManager {
+  private container: HTMLElement;
+  private soundEngine: SoundEngine;
+  private callbacks: InputCallbacks;
+
+  private currentStage: StageData | null = null;
+  private staticPaths: Map<string, SplinePath> = new Map();
+
+  // 드래그 및 입력 상태
+  private isPointerDown: boolean = false;
+  private pointerId: number | null = null;
+  private startScreenPos: Point2D = { x: 0, y: 0 };
+  private startTime: number = 0;
+  private isDrawing: boolean = false;
+
+  private activePair: DotPair | null = null;
+  private activeStartTarget: 'pointA' | 'pointB' | null = null;
+  private activePoints: Point2D[] = [];
+  private activeSegments: LineSegment[] = [];
+  private stashedExistingPath: SplinePath | null = null;
+
+  constructor(container: HTMLElement, soundEngine: SoundEngine, callbacks: InputCallbacks) {
+    this.container = container;
+    this.soundEngine = soundEngine;
+    this.callbacks = callbacks;
+
+    this.bindEvents();
+  }
+
+  setStage(stage: StageData): void {
+    this.currentStage = stage;
+    this.cancelDrawing();
+  }
+
+  setStaticPaths(paths: Map<string, SplinePath>): void {
+    this.staticPaths = paths;
+  }
+
+  private bindEvents(): void {
+    this.container.addEventListener('pointerdown', this.handlePointerDown);
+    window.addEventListener('pointermove', this.handlePointerMove);
+    window.addEventListener('pointerup', this.handlePointerUp);
+    window.addEventListener('pointercancel', this.handlePointerCancel);
+  }
+
+  destroy(): void {
+    this.container.removeEventListener('pointerdown', this.handlePointerDown);
+    window.removeEventListener('pointermove', this.handlePointerMove);
+    window.removeEventListener('pointerup', this.handlePointerUp);
+    window.removeEventListener('pointercancel', this.handlePointerCancel);
+  }
+
+  /**
+   * 클라이언트 CSS 화면 좌표 -> 0.0~1.0 정규화 좌표 변환
+   */
+  private screenToNormalized(screenX: number, screenY: number): Point2D {
+    const rect = this.container.getBoundingClientRect();
+    const x = (screenX - rect.left) / rect.width;
+    const y = (screenY - rect.top) / rect.height;
+    return {
+      x: Math.max(0, Math.min(1, x)),
+      y: Math.max(0, Math.min(1, y))
+    };
+  }
+
+  private handlePointerDown = (e: PointerEvent): void => {
+    // 마우스 좌클릭 또는 터치만 처리
+    if (e.button !== 0) return;
+
+    this.soundEngine.unlock();
+    this.isPointerDown = true;
+    this.pointerId = e.pointerId;
+    this.startScreenPos = { x: e.clientX, y: e.clientY };
+    this.startTime = performance.now();
+    this.isDrawing = false;
+    this.activePoints = [];
+    this.activeSegments = [];
+
+    const normPos = this.screenToNormalized(e.clientX, e.clientY);
+
+    // 1. 점(Dot) 위를 터치했는지 확인
+    const hitDot = this.findHitDot(normPos);
+    if (hitDot) {
+      this.activePair = hitDot.pair;
+      this.activeStartTarget = hitDot.target;
+      return;
+    }
+
+    // 2. 완성된 선 위를 터치했는지 확인 (Tap-to-Erase 후보)
+    this.activePair = null;
+    this.activeStartTarget = null;
+  };
+
+  private handlePointerMove = (e: PointerEvent): void => {
+    if (!this.isPointerDown || e.pointerId !== this.pointerId) return;
+
+    const normPos = this.screenToNormalized(e.clientX, e.clientY);
+    const screenDist = Math.hypot(e.clientX - this.startScreenPos.x, e.clientY - this.startScreenPos.y);
+
+    // 아직 드로잉 모드가 아니고 드래그 임계값(8px)을 넘은 경우
+    if (!this.isDrawing) {
+      if (screenDist > 8 && this.activePair && this.activeStartTarget) {
+        // 드로잉 개시!
+        this.isDrawing = true;
+
+        // [Redraw 메카닉]: 이미 연결된 선이 있다면 임시 백업(stashedExistingPath) 후 새 드로잉 시작
+        if (this.staticPaths.has(this.activePair.pairId)) {
+          this.stashedExistingPath = this.staticPaths.get(this.activePair.pairId) || null;
+          this.callbacks.onPathErase(this.activePair.pairId);
+        } else {
+          this.stashedExistingPath = null;
+        }
+
+        const startPoint = this.activeStartTarget === 'pointA' ? this.activePair.pointA : this.activePair.pointB;
+        this.activePoints = [{ ...startPoint }, normPos];
+        this.activeSegments = [{ p1: startPoint, p2: normPos }];
+
+        this.soundEngine.startDrawingSound();
+        this.callbacks.onDrawStart?.();
+        this.callbacks.onDrawUpdate?.(this.activePoints, this.activePair.color);
+      }
+      return;
+    }
+
+    // 드로잉 진행 중
+    if (this.isDrawing && this.activePair) {
+      const prevPoint = this.activePoints[this.activePoints.length - 1];
+      const distFromPrev = Vector2.distance(prevPoint, normPos);
+
+      // 너무 미세한 이동은 스킵하여 연산 최적화
+      if (distFromPrev < 0.012) return;
+
+      const newSegment: LineSegment = { p1: prevPoint, p2: normPos };
+
+      // [즉각 차단(Rebound / Block) 0순위: 보드 경계선 밖 차단]
+      // 점의 중심에서 선이 출발할 때 테두리 벽에 바로 걸려서 튕기는 현상 방지: 시작점 반경 이내에서는 여유 허용
+      const startPoint = this.activeStartTarget === 'pointA' ? this.activePair.pointA : this.activePair.pointB;
+      const distFromStart = Vector2.distance(normPos, startPoint);
+      if (distFromStart > this.activePair.radius * 1.0 && !this.isInsideBoard(normPos)) {
+        this.triggerReboundBlock(normPos);
+        return;
+      }
+
+      // [즉각 차단(Rebound / Block) 검사]
+      // 1. 타 색상 선분과의 교차 검사
+      const existingLines = Array.from(this.staticPaths.values()).map((p) => ({
+        pairId: p.pairId,
+        segments: p.tessellatedSegments
+      }));
+
+      const intersectCheck = Intersection.doesSegmentIntersectExistingLines(
+        newSegment,
+        existingLines,
+        this.activePair.pairId
+      );
+
+      if (intersectCheck.hit) {
+        this.triggerReboundBlock(normPos);
+        return;
+      }
+
+      // 2. 장애물 충돌 검사
+      if (this.currentStage) {
+        for (const obs of this.currentStage.obstacles) {
+          if (Intersection.doesSegmentIntersectObstacle(prevPoint, normPos, obs)) {
+            this.triggerReboundBlock(normPos);
+            return;
+          }
+        }
+      }
+
+      // 3. 다른 색상 점 중심 관통 검사 (Keep-out zone: 점 핵 중심부 0.45만 차단)
+      if (this.currentStage) {
+        for (const otherPair of this.currentStage.dots) {
+          if (otherPair.pairId === this.activePair.pairId) continue;
+          const keepOutRadius = otherPair.radius * 0.45;
+          if (
+            Intersection.doesSegmentIntersectCircle(prevPoint, normPos, otherPair.pointA, keepOutRadius) ||
+            Intersection.doesSegmentIntersectCircle(prevPoint, normPos, otherPair.pointB, keepOutRadius)
+          ) {
+            this.triggerReboundBlock(normPos);
+            return;
+          }
+        }
+      }
+
+      // 4. 자기 교차 검사
+      this.activePoints.push(normPos);
+      this.activeSegments.push(newSegment);
+      if (Intersection.doesPathSelfIntersect(this.activeSegments)) {
+        this.triggerReboundBlock(normPos);
+        return;
+      }
+
+      // 5. 반대편 짝 점 스냅 및 연결 완료 검사
+      const targetPoint = this.activeStartTarget === 'pointA' ? this.activePair.pointB : this.activePair.pointA;
+      const distToTarget = Vector2.distance(normPos, targetPoint);
+      const snapRadius = this.activePair.radius * 1.5;
+
+      if (distToTarget <= snapRadius) {
+        const finalSegment: LineSegment = { p1: normPos, p2: targetPoint };
+
+        // [도착점 스냅 직전 마지막 선분 충돌 및 교차 검사]
+        // 1) 타 색상 선분과의 교차 검사
+        const snapIntersectCheck = Intersection.doesSegmentIntersectExistingLines(
+          finalSegment,
+          existingLines,
+          this.activePair.pairId
+        );
+        if (snapIntersectCheck.hit) {
+          this.triggerReboundBlock(normPos);
+          return;
+        }
+
+        // 2) 장애물 충돌 검사
+        if (this.currentStage) {
+          for (const obs of this.currentStage.obstacles) {
+            if (Intersection.doesSegmentIntersectObstacle(normPos, targetPoint, obs)) {
+              this.triggerReboundBlock(normPos);
+              return;
+            }
+          }
+        }
+
+        // 3) 다른 색상 점 중심 관통 검사 (Keep-out zone: 점 핵 중심부 0.45만 차단)
+        if (this.currentStage) {
+          for (const otherPair of this.currentStage.dots) {
+            if (otherPair.pairId === this.activePair.pairId) continue;
+            const keepOutRadius = otherPair.radius * 0.45;
+            if (
+              Intersection.doesSegmentIntersectCircle(normPos, targetPoint, otherPair.pointA, keepOutRadius) ||
+              Intersection.doesSegmentIntersectCircle(normPos, targetPoint, otherPair.pointB, keepOutRadius)
+            ) {
+              this.triggerReboundBlock(normPos);
+              return;
+            }
+          }
+        }
+
+        // 4) 자기 교차 검사 (스냅 선분 포함)
+        const testSegments = [...this.activeSegments, finalSegment];
+        if (Intersection.doesPathSelfIntersect(testSegments)) {
+          this.triggerReboundBlock(normPos);
+          return;
+        }
+
+        // 끝점까지 안전하게 스냅 및 완료
+        this.activePoints.push({ ...targetPoint });
+        this.activeSegments.push(finalSegment);
+        this.completeDrawing();
+        return;
+      }
+
+      // 정상 경로 갱신
+      this.callbacks.onDrawUpdate?.(this.activePoints, this.activePair.color);
+    }
+  };
+
+  private handlePointerUp = (e: PointerEvent): void => {
+    if (!this.isPointerDown || e.pointerId !== this.pointerId) return;
+
+    const screenDist = Math.hypot(e.clientX - this.startScreenPos.x, e.clientY - this.startScreenPos.y);
+    const duration = performance.now() - this.startTime;
+    const normPos = this.screenToNormalized(e.clientX, e.clientY);
+
+    // [Tap-to-Erase 메카닉]
+    if (!this.isDrawing && screenDist < 8 && duration < 300) {
+      this.handleTapToErase(normPos);
+    }
+
+    if (this.isDrawing) {
+      // 반대편 점에 닿지 못하고 허공에서 손을 뗀 경우 -> 취소
+      this.cancelDrawing();
+    }
+
+    this.isPointerDown = false;
+    this.pointerId = null;
+    this.activePair = null;
+    this.activeStartTarget = null;
+  };
+
+  private handlePointerCancel = (e: PointerEvent): void => {
+    if (e.pointerId === this.pointerId) {
+      this.cancelDrawing();
+      this.isPointerDown = false;
+      this.pointerId = null;
+      this.activePair = null;
+      this.activeStartTarget = null;
+    }
+  };
+
+  /**
+   * 점 또는 선을 탭했을 때 해당 색상 선 지우기
+   */
+  private handleTapToErase(normPos: Point2D): void {
+    // 1. 점 탭 검사
+    const hitDot = this.findHitDot(normPos);
+    if (hitDot) {
+      if (this.staticPaths.has(hitDot.pair.pairId)) {
+        this.soundEngine.playErasePop();
+        this.triggerHaptic('light');
+        this.callbacks.onPathErase(hitDot.pair.pairId);
+        return;
+      }
+    }
+
+    // 2. 완성된 선 탭 검사 (선분과의 거리 검사)
+    for (const [pairId, spline] of this.staticPaths.entries()) {
+      for (const seg of spline.tessellatedSegments) {
+        const d = Vector2.distanceToSegment(normPos, seg.p1, seg.p2);
+        if (d < 0.04) {
+          // 선분 근처 탭 감지
+          this.soundEngine.playErasePop();
+          this.triggerHaptic('light');
+          this.callbacks.onPathErase(pairId);
+          return;
+        }
+      }
+    }
+  }
+
+  /**
+   * 점이 보드 내부(테두리 안쪽)에 있는지 검사하여 테두리 밖 우회 원천 차단
+   * 점의 중심에서 출발할 때 테두리 벽에 바로 걸려서 튕기는 현상을 완화하기 위해 점 반경 수준의 여유 버퍼를 허용
+   */
+  private isInsideBoard(point: Point2D): boolean {
+    if (!this.currentStage || !this.currentStage.board) return true;
+    const board = this.currentStage.board;
+    const dotRadius = this.activePair ? this.activePair.radius : 0.04;
+    const margin = dotRadius * 0.75; // 테두리 여유 버퍼
+
+    if (board.type === 'circle') {
+      const dist = Math.hypot(point.x - board.centerX, point.y - board.centerY);
+      return dist <= board.radius + margin;
+    } else if (board.type === 'rect') {
+      return (
+        point.x >= board.bounds.minX - margin &&
+        point.x <= board.bounds.maxX + margin &&
+        point.y >= board.bounds.minY - margin &&
+        point.y <= board.bounds.maxY + margin
+      );
+    }
+    return true;
+  }
+
+  /**
+   * 충돌 발생 시 차단(Rebound) 피드백 및 드로잉 중단
+   */
+  private triggerReboundBlock(collisionPos: Point2D): void {
+    this.soundEngine.stopDrawingSound();
+    this.soundEngine.playCollisionBuzzer();
+    this.triggerHaptic('error');
+
+    this.callbacks.onCollision?.(collisionPos);
+    this.cancelDrawing();
+  }
+
+  /**
+   * 드로잉 성공 완료 처리
+   */
+  private completeDrawing(): void {
+    if (!this.activePair) return;
+
+    this.soundEngine.stopDrawingSound();
+    const pairId = this.activePair.pairId;
+    const color = this.activePair.color;
+    const rawPoints = [...this.activePoints];
+    const tessellatedSegments = Spline.tessellatePath(rawPoints);
+    const totalLength = Spline.calculatePathLength(rawPoints);
+
+    const completedPath: SplinePath = {
+      pairId,
+      color,
+      rawPoints,
+      tessellatedSegments,
+      totalLength,
+      isComplete: true
+    };
+
+    // 음계 사운드 및 햅틱
+    const colorIndex = parseInt(pairId.replace('pair_', '')) - 1;
+    this.soundEngine.playConnectTone(isNaN(colorIndex) ? 0 : colorIndex);
+    this.triggerHaptic('success');
+
+    // 정상 완료 시 이전 백업 경로는 새 경로로 덮어써지므로 폐기
+    this.stashedExistingPath = null;
+
+    this.callbacks.onPathComplete(pairId, completedPath);
+
+    this.isDrawing = false;
+    this.isPointerDown = false;
+    this.activePoints = [];
+    this.activeSegments = [];
+    this.activePair = null;
+    this.activeStartTarget = null;
+  }
+
+  /**
+   * 재드래그 취소 또는 충돌 시 백업해둔 기존 경로를 롤백(복원)
+   */
+  private rollbackStashedPath(): void {
+    if (this.stashedExistingPath) {
+      this.callbacks.onPathComplete(this.stashedExistingPath.pairId, this.stashedExistingPath);
+      this.stashedExistingPath = null;
+    }
+  }
+
+  private cancelDrawing(): void {
+    this.soundEngine.stopDrawingSound();
+    if (this.isDrawing) {
+      this.callbacks.onDrawCancel?.();
+    }
+    // 취소 시 기존 백업 경로가 있다면 복원
+    this.rollbackStashedPath();
+
+    this.isDrawing = false;
+    this.activePoints = [];
+    this.activeSegments = [];
+  }
+
+  private findHitDot(pos: Point2D): { pair: DotPair; target: 'pointA' | 'pointB' } | null {
+    if (!this.currentStage) return null;
+
+    for (const pair of this.currentStage.dots) {
+      const hitRadius = pair.radius * 1.5; // 터치 편의를 위해 1.5배 히트박스 적용
+      if (Vector2.distance(pos, pair.pointA) <= hitRadius) {
+        return { pair, target: 'pointA' };
+      }
+      if (Vector2.distance(pos, pair.pointB) <= hitRadius) {
+        return { pair, target: 'pointB' };
+      }
+    }
+    return null;
+  }
+
+  private triggerHaptic(type: 'light' | 'success' | 'error'): void {
+    try {
+      if ('vibrate' in navigator) {
+        if (type === 'light') {
+          navigator.vibrate(15);
+        } else if (type === 'success') {
+          navigator.vibrate([20, 30, 40]);
+        } else if (type === 'error') {
+          navigator.vibrate([60, 40, 60]);
+        }
+      }
+    } catch {}
+  }
+}

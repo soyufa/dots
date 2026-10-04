@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#ECE5D8">
+  <title>Connect Dots - 자유 곡선 점 잇기</title>
+  <link rel="stylesheet" href="./src/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 헤더 HUD -->
+    <header class="hud-header">
+      <div class="header-left">
+        <span id="difficulty-badge" class="diff-badge diff-easy">EASY</span>
+        <h1 id="current-stage-title" class="stage-title">STAGE 1</h1>
+      </div>
+      <div class="header-right">
+        <span id="total-stars-counter" class="stars-badge">★ 0</span>
+        <button id="btn-mute" class="btn-icon" title="소리 토글">🔊</button>
+      </div>
+    </header>
+
+    <div class="sub-status-bar">
+      <span id="connection-status">연결: 0 / 3</span>
+      <span id="board-guide-text">테두리 점들을 곡선으로 이어보세요</span>
+    </div>
+
+    <!-- 4-Layer 캔버스 스택 컨테이너 -->
+    <div id="canvas-card" class="canvas-card">
+      <canvas id="bg-canvas" class="canvas-layer"></canvas>
+      <canvas id="static-canvas" class="canvas-layer"></canvas>
+      <canvas id="active-canvas" class="canvas-layer"></canvas>
+      <canvas id="fx-canvas" class="canvas-layer"></canvas>
+    </div>
+
+    <!-- 하단 툴바 -->
+    <footer class="bottom-controls">
+      <button id="btn-hint" class="btn-tool" title="힌트 보기">
+        <span class="btn-emoji">💡</span>
+        <span>힌트</span>
+      </button>
+      <button id="btn-undo" class="btn-tool" title="한 단계 되돌리기">
+        <span class="btn-emoji">↩️</span>
+        <span>되돌리기</span>
+      </button>
+      <button id="btn-reset" class="btn-tool" title="전체 지우기">
+        <span class="btn-emoji">🔄</span>
+        <span>다시하기</span>
+      </button>
+      <button id="btn-stage-select" class="btn-tool" title="스테이지 목록">
+        <span class="btn-emoji">📋</span>
+        <span>목록</span>
+      </button>
+    </footer>
+  </div>
+
+  <!-- 스테이지 선택 모달 -->
+  <div id="stage-select-modal" class="modal-overlay hidden">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <h2 class="modal-title">스테이지 선택</h2>
+        <button id="btn-close-stage-select" class="btn-close-modal">✕</button>
+      </div>
+
+      <div class="difficulty-tabs">
+        <button class="diff-tab-btn active" data-diff="easy">쉬움 (Easy)</button>
+        <button class="diff-tab-btn" data-diff="normal">보통 (Normal)</button>
+        <button class="diff-tab-btn" data-diff="hard">어려움 (Hard)</button>
+      </div>
+
+      <div id="stage-grid-container" class="stage-grid">
+        <!-- 50개 스테이지 카드가 동적으로 주입됨 -->
+      </div>
+    </div>
+  </div>
+
+  <!-- 스테이지 클리어 모달 -->
+  <div id="clear-modal" class="modal-overlay hidden">
+    <div class="modal-sheet clear-modal-content">
+      <h2 class="clear-title">STAGE CLEAR!</h2>
+      <div id="clear-stars-container" class="clear-stars">
+        <span class="star-item active">★</span>
+        <span class="star-item active">★</span>
+        <span class="star-item active">★</span>
+      </div>
+      <p id="clear-efficiency-text" class="clear-efficiency">경로 효율성: 100%</p>
+
+      <div class="clear-buttons">
+        <button id="btn-next-stage" class="btn-primary-action">다음 스테이지 ➔</button>
+        <div class="clear-sub-actions">
+          <button id="btn-replay-stage" class="btn-secondary-action">다시 도전</button>
+          <button id="btn-clear-to-select" class="btn-secondary-action">스테이지 목록</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>
